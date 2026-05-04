@@ -1,0 +1,118 @@
+name: Preview Tunnel
+
+# Spins up the Next.js dev server on a GitHub Actions runner, exposes it via
+# a Cloudflare quick tunnel, and writes the public URL back to .preview-url
+# on this branch so it can be picked up without parsing logs. Free runners
+# have full outbound internet, which is exactly what the app's host sandbox
+# does not.
+
+on:
+  push:
+    branches: [claude/community-platform-design-PbLkS]
+    paths-ignore: [".preview-url", ".github/workflows/preview.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: preview-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install deps
+        run: npm install --no-audit --no-fund
+
+      - name: Set up DB and seed
+        run: |
+          npx prisma db push --skip-generate
+          npm run db:seed
+
+      - name: Start Next.js dev server
+        run: |
+          nohup npm run dev > dev-server.log 2>&1 &
+          echo "Waiting for server..."
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:3000/ > /dev/null; then
+              echo "Server is up."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Server didn't come up in time. Last lines of log:"
+          tail -30 dev-server.log
+          exit 1
+
+      - name: Install cloudflared
+        run: |
+          curl -L -sS -o cloudflared \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          chmod +x cloudflared
+          ./cloudflared --version
+
+      - name: Start tunnel and capture public URL
+        id: tunnel
+        run: |
+          nohup ./cloudflared tunnel --no-autoupdate \
+            --url http://localhost:3000 > tunnel.log 2>&1 &
+          echo "Waiting for trycloudflare URL..."
+          URL=""
+          for i in $(seq 1 60); do
+            URL=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' tunnel.log | head -1)
+            if [ -n "$URL" ]; then break; fi
+            sleep 2
+          done
+          if [ -z "$URL" ]; then
+            echo "Failed to obtain tunnel URL. Tail:"; tail -50 tunnel.log; exit 1
+          fi
+          echo "URL=$URL" >> "$GITHUB_OUTPUT"
+          echo "Public URL: $URL"
+
+      - name: Persist URL to .preview-url
+        env:
+          URL: ${{ steps.tunnel.outputs.URL }}
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "Preview Bot"
+          {
+            echo "$URL"
+            echo ""
+            echo "started: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "expires_at_or_before: $(date -u -d '+5 hours 30 minutes' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          } > .preview-url
+          git add .preview-url
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "chore: update preview URL [skip ci]"
+            for i in 1 2 3; do
+              if git push; then break; fi
+              git pull --rebase || true
+              sleep $((i*3))
+            done
+          fi
+
+      - name: Keep tunnel alive until job timeout
+        env:
+          URL: ${{ steps.tunnel.outputs.URL }}
+        run: |
+          echo "::notice title=Preview ready::$URL"
+          # Heartbeat. Job timeout will kill us; nothing else to do.
+          while sleep 60; do
+            if ! curl -sf -o /dev/null "$URL"; then
+              echo "Health check failed at $(date -u). Tunnel/server may be down."
+            fi
+          done
