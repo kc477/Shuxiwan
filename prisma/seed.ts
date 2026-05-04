@@ -4,6 +4,7 @@ const prisma = new PrismaClient();
 
 async function main() {
   // Wipe demo data so re-seeds are idempotent.
+  await prisma.activityLog.deleteMany({});
   await prisma.match.deleteMany({});
   await prisma.matchIntent.deleteMany({});
   await prisma.zoneMember.deleteMany({});
@@ -229,8 +230,56 @@ async function main() {
 
   void z1;
 
+  // Seed activity log so the home page has a pulse on first open.
+  // Staggered timestamps (oldest first; newest near "just now").
+  const nowMs = Date.now();
+  const m = (mins: number) => new Date(nowMs - mins * 60_000);
+  const activities: {
+    userId: string;
+    kind: string;
+    payload: Record<string, unknown>;
+    createdAt: Date;
+  }[] = [
+    { userId: users[0].id, kind: "joined_event", payload: {}, createdAt: m(42) },
+    { userId: users[0].id, kind: "completed_profile", payload: {}, createdAt: m(40) },
+    { userId: users[2].id, kind: "joined_event", payload: {}, createdAt: m(35) },
+    { userId: users[2].id, kind: "completed_profile", payload: {}, createdAt: m(33) },
+    {
+      userId: users[2].id,
+      kind: "created_zone",
+      payload: { zoneId: z1.id, title: z1.title },
+      createdAt: m(28),
+    },
+    { userId: users[3].id, kind: "joined_event", payload: {}, createdAt: m(20) },
+    {
+      userId: users[3].id,
+      kind: "joined_zone",
+      payload: { zoneId: z1.id, title: z1.title },
+      createdAt: m(18),
+    },
+    { userId: users[5].id, kind: "joined_event", payload: {}, createdAt: m(8) },
+    {
+      userId: users[5].id,
+      kind: "joined_zone",
+      payload: { zoneId: z1.id, title: z1.title },
+      createdAt: m(6),
+    },
+    { userId: users[1].id, kind: "joined_event", payload: {}, createdAt: m(2) },
+  ];
+  for (const a of activities) {
+    await prisma.activityLog.create({
+      data: {
+        eventId: event.id,
+        userId: a.userId,
+        kind: a.kind,
+        payload: JSON.stringify(a.payload),
+        createdAt: a.createdAt,
+      },
+    });
+  }
+
   console.log(
-    `Seeded: event=${event.id}, ${users.length} users, ${slots.length} slots, 2 zones`
+    `Seeded: event=${event.id}, ${users.length} users, ${slots.length} slots, 2 zones, ${activities.length} activities`
   );
   console.log("Open http://localhost:3000 then sign in as any of:");
   for (const u of users) console.log(`  - ${u.name}`);

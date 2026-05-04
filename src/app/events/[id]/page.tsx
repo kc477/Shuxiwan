@@ -5,6 +5,8 @@ import { getCurrentUser } from "@/lib/session";
 import { prisma } from "@/lib/db";
 import { Button, Card } from "@/components/ui";
 import { GridMap } from "./grid-map";
+import { ActivityFeed } from "./activity-feed";
+import { AutoRefresh } from "./auto-refresh";
 
 export const dynamic = "force-dynamic";
 
@@ -92,12 +94,40 @@ export default async function EventPage({ params }: { params: { id: string } }) 
       )}
 
       <section className="px-5 pt-5">
+        <ActivityFeed eventId={event.id} />
+      </section>
+
+      <section className="px-5 pt-5">
         <div className="mb-2 flex items-center justify-between">
           <h2 className="text-sm font-semibold text-ink-700">现场地图</h2>
           <span className="text-xs text-ink-400">点区域查看 zone</span>
         </div>
-        <GridMap event={event} zonesBySlot={Object.fromEntries(zonesBySlot)} />
+        <GridMap
+          event={{
+            id: event.id,
+            venueMapUrl: event.venueMapUrl,
+            zoneSlots: event.zoneSlots.map((s) => ({
+              id: s.id,
+              name: s.name,
+              shape: s.shape,
+              capacityHint: s.capacityHint,
+            })),
+          }}
+          zonesBySlot={Object.fromEntries(
+            Array.from(zonesBySlot.entries()).map(([slotId, zones]) => [
+              slotId,
+              zones.map((z) => ({
+                id: z.id,
+                zoneSlotId: z.zoneSlotId,
+                title: z.title,
+                status: z.status,
+              })),
+            ])
+          )}
+        />
       </section>
+
+      <AutoRefresh intervalMs={30000} />
 
       <section className="mt-6 px-5">
         <div className="mb-2 flex items-center justify-between">
