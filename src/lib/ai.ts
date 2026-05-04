@@ -311,8 +311,13 @@ let cached: AIProvider | null = null;
 export function ai(): AIProvider {
   if (cached) return cached;
   const explicit = process.env.AI_PROVIDER;
-  const hasKey = !!(process.env.ANTHROPIC_AUTH_TOKEN || process.env.ANTHROPIC_API_KEY);
-  const useAnthropic = explicit === "anthropic" || (explicit !== "stub" && hasKey);
+  const hasKey = !!(
+    process.env.ANTHROPIC_AUTH_TOKEN || process.env.ANTHROPIC_API_KEY
+  );
+  // Anthropic only if we actually have a credential. Setting
+  // AI_PROVIDER=anthropic with no key falls back to stub rather than
+  // crashing every chat turn with an auth error.
+  const useAnthropic = hasKey && explicit !== "stub";
   cached = useAnthropic ? new AnthropicProvider() : new StubProvider();
   return cached;
 }
