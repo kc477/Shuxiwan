@@ -1,0 +1,208 @@
+// Shuxiwan - Event Connect data model
+// Design notes:
+//   - SQLite for dev to keep MVP friction low. Swap `provider` to "postgresql"
+//     for production; everything else is portable.
+//   - String[] / Json fields are stored as JSON-serialized strings on SQLite.
+//     Helpers in src/lib/db.ts wrap (de)serialization.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ----- Users -----
+
+model User {
+  id        String   @id @default(cuid())
+  phone     String?  @unique
+  email     String?  @unique
+  name      String
+  avatar    String?
+  wechatId  String?  // never returned in public APIs
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  profiles      Profile[]
+  participants  EventParticipant[]
+  zonesCreated  Zone[]      @relation("ZoneCreator")
+  zoneJoins     ZoneMember[]
+  matchesA      Match[]     @relation("MatchUserA")
+  matchesB      Match[]     @relation("MatchUserB")
+  intentsFrom   MatchIntent[] @relation("IntentFrom")
+  intentsTo     MatchIntent[] @relation("IntentTo")
+  organizerOf   Event[]     @relation("EventOrganizer")
+}
+
+// Per-event profile. A user can attend multiple events; the soft fields
+// (focus / challenge / etc.) are usually event-specific.
+model Profile {
+  id      String @id @default(cuid())
+  userId  String
+  eventId String
+
+  company         String?
+  role            String?  // founder / partner / earlyEmployee / investor / other
+  stage           String?  // idea / preSeed / seed / seriesAPlus / profitable / other
+  domains         String   @default("[]") // JSON: string[]
+
+  currentFocus     String?
+  currentChallenge String?
+  lookingFor       String?
+  canOffer         String?
+
+  eventTopics     String   @default("[]") // JSON: string[]  (subset of Event.presetTopics)
+  isVisible       Boolean  @default(true)
+
+  // Embedding for matching (JSON-encoded float array). Null until generated.
+  embedding       String?
+
+  completed       Boolean  @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, eventId])
+  @@index([eventId])
+}
+
+// ----- Events -----
+
+model Event {
+  id           String   @id @default(cuid())
+  organizerId  String
+  name         String
+  startTime    DateTime
+  endTime      DateTime
+  locationName String
+
+  venueMapUrl    String?
+  presetTopics   String   @default("[]") // JSON: string[]
+  capacity       Int?
+  status         String   @default("draft") // draft / live / ended / archived
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organizer    User              @relation("EventOrganizer", fields: [organizerId], references: [id])
+  zoneSlots    ZoneSlot[]
+  zones        Zone[]
+  participants EventParticipant[]
+  profiles     Profile[]
+  matches      Match[]
+  intents      MatchIntent[]
+}
+
+model EventParticipant {
+  id        String   @id @default(cuid())
+  userId    String
+  eventId   String
+  joinedAt  DateTime @default(now())
+  checkedIn Boolean  @default(false)
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, eventId])
+  @@index([eventId])
+}
+
+// ----- Grid / Zones -----
+
+// A region drawn on the venue map by the organizer.
+// shape: JSON describing rect or circle in normalized 0..1 coords:
+//   { type: "rect", x, y, w, h }  |  { type: "circle", cx, cy, r }
+model ZoneSlot {
+  id            String  @id @default(cuid())
+  eventId       String
+  name          String
+  shape         String  @default("{}")
+  capacityHint  Int?
+  allowUserZone Boolean @default(true)
+
+  event Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  zones Zone[]
+
+  @@index([eventId])
+}
+
+model Zone {
+  id          String   @id @default(cuid())
+  eventId     String
+  zoneSlotId  String
+  creatorId   String
+  title       String
+  question    String
+  tags        String   @default("[]") // JSON: string[]
+  type        String   @default("user_generated") // official / user_generated
+  status      String   @default("gathering")     // gathering / active / closed / archived
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime?
+
+  event    Event       @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  zoneSlot ZoneSlot    @relation(fields: [zoneSlotId], references: [id], onDelete: Cascade)
+  creator  User        @relation("ZoneCreator", fields: [creatorId], references: [id])
+  members  ZoneMember[]
+
+  @@index([eventId])
+  @@index([zoneSlotId])
+}
+
+model ZoneMember {
+  id       String   @id @default(cuid())
+  zoneId   String
+  userId   String
+  joinedAt DateTime @default(now())
+  arrived  Boolean  @default(false)
+  leftAt   DateTime?
+
+  zone Zone @relation(fields: [zoneId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([zoneId, userId])
+  @@index([userId])
+}
+
+// ----- Matching -----
+
+// Asymmetric "want to chat" expression. When both directions exist, a Match
+// row is created and wechatIds are exchanged.
+model MatchIntent {
+  id        String   @id @default(cuid())
+  eventId   String
+  fromId    String
+  toId      String
+  reason    String?  // surfaced match reason at the time of intent
+  createdAt DateTime @default(now())
+  expiresAt DateTime?
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  from  User  @relation("IntentFrom", fields: [fromId], references: [id], onDelete: Cascade)
+  to    User  @relation("IntentTo",   fields: [toId],   references: [id], onDelete: Cascade)
+
+  @@unique([eventId, fromId, toId])
+  @@index([eventId, toId])
+}
+
+model Match {
+  id        String   @id @default(cuid())
+  eventId   String
+  userAId   String
+  userBId   String
+  reasonForA String?
+  reasonForB String?
+  createdAt DateTime @default(now())
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  userA User  @relation("MatchUserA", fields: [userAId], references: [id])
+  userB User  @relation("MatchUserB", fields: [userBId], references: [id])
+
+  @@unique([eventId, userAId, userBId])
+  @@index([eventId])
+}
