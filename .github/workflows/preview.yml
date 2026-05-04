@@ -2,9 +2,8 @@ name: Preview Tunnel
 
 # Spins up the Next.js dev server on a GitHub Actions runner, exposes it via
 # a Cloudflare quick tunnel, and writes the public URL back to .preview-url
-# on this branch so it can be picked up without parsing logs. Free runners
-# have full outbound internet, which is exactly what the app's host sandbox
-# does not.
+# on this branch via the Contents API. Free runners have full outbound
+# internet, which is what the agent's host sandbox does not.
 
 on:
   push:
@@ -19,6 +18,9 @@ concurrency:
   group: preview-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  DATABASE_URL: "file:./dev.db"
+
 jobs:
   preview:
     runs-on: ubuntu-latest
@@ -32,42 +34,53 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install deps
-        run: npm install --no-audit --no-fund
+      - name: Write .env (some tools read this directly)
+        run: echo 'DATABASE_URL="file:./dev.db"' > .env
 
-      - name: Set up DB and seed
+      - name: Install deps
         run: |
+          set -e
+          npm install --no-audit --no-fund
+
+      - name: Push schema and seed
+        run: |
+          set -e
           npx prisma db push --skip-generate
           npm run db:seed
 
-      - name: Start Next.js dev server
+      - name: Start Next.js dev server in background
         run: |
-          nohup npm run dev > dev-server.log 2>&1 &
-          echo "Waiting for server..."
+          set -x
+          # Detach with setsid so the process survives the step boundary.
+          setsid bash -c 'exec npm run dev' > dev-server.log 2>&1 < /dev/null &
+          echo $! > server.pid
+          echo "Waiting for server on :3000..."
           for i in $(seq 1 60); do
-            if curl -sf http://localhost:3000/ > /dev/null; then
-              echo "Server is up."
+            if curl -sf -o /dev/null http://localhost:3000/; then
+              echo "Server ready."
               exit 0
             fi
             sleep 2
           done
-          echo "Server didn't come up in time. Last lines of log:"
-          tail -30 dev-server.log
+          echo "::error::Dev server did not become ready"
+          echo "--- dev-server.log tail ---"
+          tail -80 dev-server.log
           exit 1
 
       - name: Install cloudflared
         run: |
-          curl -L -sS -o cloudflared \
+          curl -L -sS --fail -o cloudflared \
             https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
           chmod +x cloudflared
           ./cloudflared --version
 
-      - name: Start tunnel and capture public URL
+      - name: Start cloudflared tunnel and capture public URL
         id: tunnel
         run: |
-          nohup ./cloudflared tunnel --no-autoupdate \
-            --url http://localhost:3000 > tunnel.log 2>&1 &
-          echo "Waiting for trycloudflare URL..."
+          set -x
+          setsid bash -c './cloudflared tunnel --no-autoupdate --url http://localhost:3000' \
+            > tunnel.log 2>&1 < /dev/null &
+          echo $! > tunnel.pid
           URL=""
           for i in $(seq 1 60); do
             URL=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' tunnel.log | head -1)
@@ -75,44 +88,56 @@ jobs:
             sleep 2
           done
           if [ -z "$URL" ]; then
-            echo "Failed to obtain tunnel URL. Tail:"; tail -50 tunnel.log; exit 1
+            echo "::error::Tunnel URL not obtained"
+            tail -80 tunnel.log
+            exit 1
           fi
           echo "URL=$URL" >> "$GITHUB_OUTPUT"
-          echo "Public URL: $URL"
+          echo "::notice title=Preview ready::$URL"
 
-      - name: Persist URL to .preview-url
+      - name: Persist URL via Contents API
         env:
+          GH_TOKEN: ${{ github.token }}
           URL: ${{ steps.tunnel.outputs.URL }}
+          BR: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          git config user.email "actions@github.com"
-          git config user.name "Preview Bot"
-          {
-            echo "$URL"
-            echo ""
-            echo "started: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            echo "expires_at_or_before: $(date -u -d '+5 hours 30 minutes' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)"
-            echo "run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          } > .preview-url
-          git add .preview-url
-          if git diff --cached --quiet; then
-            echo "No changes to commit."
+          set -e
+          BODY=$(printf '%s\n\nstarted: %s\nrun: %s\n' \
+            "$URL" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$RUN_URL")
+          B64=$(printf '%s' "$BODY" | base64 -w 0)
+
+          SHA=$(curl -sS -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPO/contents/.preview-url?ref=$BR" \
+            | jq -r '.sha // empty')
+
+          if [ -n "$SHA" ]; then
+            PAYLOAD=$(jq -nc --arg m "chore: update preview URL [skip ci]" \
+              --arg c "$B64" --arg b "$BR" --arg s "$SHA" \
+              '{message:$m, content:$c, branch:$b, sha:$s}')
           else
-            git commit -m "chore: update preview URL [skip ci]"
-            for i in 1 2 3; do
-              if git push; then break; fi
-              git pull --rebase || true
-              sleep $((i*3))
-            done
+            PAYLOAD=$(jq -nc --arg m "chore: add preview URL [skip ci]" \
+              --arg c "$B64" --arg b "$BR" \
+              '{message:$m, content:$c, branch:$b}')
           fi
 
-      - name: Keep tunnel alive until job timeout
+          RESP=$(curl -sS -X PUT \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -d "$PAYLOAD" \
+            "https://api.github.com/repos/$REPO/contents/.preview-url")
+          echo "$RESP" | jq '{commit: .commit.sha, content_sha: .content.sha, message: .message}' || echo "$RESP"
+
+      - name: Heartbeat (keep tunnel alive until job timeout)
         env:
           URL: ${{ steps.tunnel.outputs.URL }}
         run: |
-          echo "::notice title=Preview ready::$URL"
-          # Heartbeat. Job timeout will kill us; nothing else to do.
           while sleep 60; do
-            if ! curl -sf -o /dev/null "$URL"; then
-              echo "Health check failed at $(date -u). Tunnel/server may be down."
+            if curl -sf -o /dev/null --max-time 10 "$URL/"; then
+              echo "$(date -u) ok"
+            else
+              echo "$(date -u) WARN health check failed"
             fi
           done
