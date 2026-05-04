@@ -102,7 +102,9 @@ export default async function RecommendationsPage({
                   name={u.name}
                   company={p?.company ?? null}
                   focus={p?.currentFocus ?? null}
+                  challenge={p?.currentChallenge ?? null}
                   lookingFor={p?.lookingFor ?? null}
+                  canOffer={p?.canOffer ?? null}
                   domains={fromJson<string[]>(p?.domains ?? "[]", [])}
                   reason={r.reason}
                   alreadyExpressed={intentTargets.has(r.userId)}

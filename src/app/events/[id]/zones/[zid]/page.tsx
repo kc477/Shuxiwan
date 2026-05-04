@@ -87,19 +87,28 @@ export default async function ZonePage({
             const p = m.user.profiles[0];
             return (
               <li key={m.id}>
-                <Card className="flex items-start justify-between gap-3 p-3">
-                  <div>
+                <Card className="p-3">
+                  <div className="flex items-baseline justify-between gap-3">
                     <div className="text-sm font-medium text-ink-900">
                       {m.user.name}
-                      {m.arrived && (
-                        <span className="ml-2 text-[10px] text-emerald-600">已到</span>
+                      {p?.company && (
+                        <span className="ml-2 text-xs font-normal text-ink-500">
+                          {p.company}
+                        </span>
                       )}
                     </div>
-                    <div className="mt-0.5 text-xs text-ink-500">
-                      {p?.company ? p.company + " · " : ""}
-                      {p?.currentFocus ? p.currentFocus : "—"}
-                    </div>
+                    {m.arrived && (
+                      <span className="text-[10px] text-emerald-600">已到 ✓</span>
+                    )}
                   </div>
+                  {p?.currentFocus && (
+                    <div className="mt-1 text-xs text-ink-700">{p.currentFocus}</div>
+                  )}
+                  {p?.currentChallenge && (
+                    <div className="mt-1 text-xs italic text-accent-600">
+                      🤔 {p.currentChallenge}
+                    </div>
+                  )}
                 </Card>
               </li>
             );

@@ -93,6 +93,49 @@ function SummaryEditor({
 }) {
   const [f, setF] = useState<ProfileFields>(initial);
   const [pending, start] = useTransition();
+  const [showPreview, setShowPreview] = useState(false);
+
+  if (showPreview) {
+    return (
+      <div className="space-y-3 pt-2">
+        <p className="text-xs text-ink-500">
+          这是别人在现场看到你时会看到的样子。觉得 OK 就发布。
+        </p>
+        <Card className="p-4">
+          <div className="text-base font-semibold text-ink-900">你</div>
+          <dl className="mt-3 space-y-2.5 text-xs">
+            <PreviewRow label="最近在搞" value={f.currentFocus} />
+            <PreviewRow
+              label="🤔 现在卡在"
+              value={f.currentChallenge}
+              accent
+            />
+            <PreviewRow label="想找的人" value={f.lookingFor} />
+            <PreviewRow label="能帮上的" value={f.canOffer} />
+          </dl>
+        </Card>
+        <Button
+          size="lg"
+          className="w-full"
+          disabled={pending}
+          onClick={() =>
+            start(async () => {
+              await saveProfileSoft(eventId, f);
+            })
+          }
+        >
+          {pending ? "发布中…" : "发布画像，进入现场"}
+        </Button>
+        <button
+          className="w-full text-xs text-ink-500 underline-offset-2 hover:underline"
+          onClick={() => setShowPreview(false)}
+        >
+          ← 还想改一下
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-3 pt-2">
       <p className="text-xs text-ink-500">
@@ -102,18 +145,38 @@ function SummaryEditor({
       <FieldRow label="现在卡在哪" value={f.currentChallenge} onChange={(v) => setF({ ...f, currentChallenge: v })} />
       <FieldRow label="想认识什么样的人" value={f.lookingFor} onChange={(v) => setF({ ...f, lookingFor: v })} />
       <FieldRow label="能帮别人什么" value={f.canOffer} onChange={(v) => setF({ ...f, canOffer: v })} />
-      <Button
-        size="lg"
-        className="w-full"
-        disabled={pending}
-        onClick={() =>
-          start(async () => {
-            await saveProfileSoft(eventId, f);
-          })
-        }
-      >
-        {pending ? "保存中…" : "确认，进入现场"}
+      <Button size="lg" className="w-full" onClick={() => setShowPreview(true)}>
+        看看别人会看到什么 →
       </Button>
+    </div>
+  );
+}
+
+function PreviewRow({
+  label,
+  value,
+  accent = false,
+}: {
+  label: string;
+  value: string;
+  accent?: boolean;
+}) {
+  return (
+    <div>
+      <dt
+        className={`text-[10px] font-medium uppercase tracking-wide ${
+          accent ? "text-accent-500" : "text-ink-400"
+        }`}
+      >
+        {label}
+      </dt>
+      <dd
+        className={`mt-0.5 text-ink-${accent ? "700" : "800"} ${
+          accent ? "italic" : ""
+        }`}
+      >
+        {value || <span className="text-ink-400">（空）</span>}
+      </dd>
     </div>
   );
 }
