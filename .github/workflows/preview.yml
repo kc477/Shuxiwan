@@ -20,6 +20,9 @@ concurrency:
 
 env:
   DATABASE_URL: "file:./dev.db"
+  AI_PROVIDER: "anthropic"
+  ANTHROPIC_AUTH_TOKEN: ${{ secrets.ANTHROPIC_AUTH_TOKEN }}
+  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
 jobs:
   preview:
