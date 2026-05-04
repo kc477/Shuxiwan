@@ -1,0 +1,5 @@
+# Touch this file to (re)trigger the preview tunnel workflow.
+# The workflow ignores changes to .preview-url and the workflow file itself,
+# so we use this trigger file to nudge it.
+
+last_trigger: 2026-05-04T07:10:00Z
