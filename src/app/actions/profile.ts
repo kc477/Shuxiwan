@@ -6,6 +6,7 @@ import { z } from "zod";
 import { prisma, fromJson, toJson } from "@/lib/db";
 import { requireUser } from "@/lib/session";
 import { ai, type ChatTurn, type ProfileFields } from "@/lib/ai";
+import { logActivity } from "@/lib/activity";
 
 const FormSchema = z.object({
   eventId: z.string().min(1),
@@ -52,6 +53,9 @@ export async function chatStep(eventId: string, history: ChatTurn[]) {
 
 export async function saveProfileSoft(eventId: string, fields: ProfileFields) {
   const me = await requireUser();
+  const prev = await prisma.profile.findUnique({
+    where: { userId_eventId: { userId: me.id, eventId } },
+  });
   await prisma.profile.update({
     where: { userId_eventId: { userId: me.id, eventId } },
     data: {
@@ -62,6 +66,9 @@ export async function saveProfileSoft(eventId: string, fields: ProfileFields) {
       completed: true,
     },
   });
+  if (!prev?.completed) {
+    await logActivity(eventId, me.id, "completed_profile");
+  }
   // Generate embedding lazily on first recommend; nothing else to do here.
   redirect(`/events/${eventId}`);
 }

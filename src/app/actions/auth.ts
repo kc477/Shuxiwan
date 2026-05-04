@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { setSessionCookie, clearSessionCookie } from "@/lib/session";
+import { logActivity } from "@/lib/activity";
 
 // MVP "auth": you give a name, we mint or reuse a User. Phone-verified login
 // will replace this; until then this lets us click through the whole flow.
@@ -17,11 +18,17 @@ export async function quickSignIn(formData: FormData) {
   setSessionCookie(user.id);
 
   if (eventId) {
+    const existing = await prisma.eventParticipant.findUnique({
+      where: { userId_eventId: { userId: user.id, eventId } },
+    });
     await prisma.eventParticipant.upsert({
       where: { userId_eventId: { userId: user.id, eventId } },
       update: {},
       create: { userId: user.id, eventId },
     });
+    if (!existing) {
+      await logActivity(eventId, user.id, "joined_event");
+    }
     redirect(`/events/${eventId}/profile`);
   }
   redirect("/");

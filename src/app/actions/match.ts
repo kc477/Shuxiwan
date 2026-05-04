@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/session";
+import { logActivity } from "@/lib/activity";
 
 // Express interest: A → B. If B has already done B → A, create a Match and
 // surface wechat ids.
@@ -22,6 +23,9 @@ export async function expressIntent(eventId: string, toUserId: string, reason: s
 
   if (reverse) {
     const [aId, bId] = me.id < toUserId ? [me.id, toUserId] : [toUserId, me.id];
+    const existing = await prisma.match.findUnique({
+      where: { eventId_userAId_userBId: { eventId, userAId: aId, userBId: bId } },
+    });
     await prisma.match.upsert({
       where: { eventId_userAId_userBId: { eventId, userAId: aId, userBId: bId } },
       update: {},
@@ -33,6 +37,13 @@ export async function expressIntent(eventId: string, toUserId: string, reason: s
         reasonForB: bId === me.id ? reason : reverse.reason,
       },
     });
+    if (!existing) {
+      const other = await prisma.user.findUnique({ where: { id: toUserId } });
+      await logActivity(eventId, me.id, "matched", {
+        otherUserId: toUserId,
+        otherName: other?.name ?? "",
+      });
+    }
     revalidatePath(`/events/${eventId}/recommendations`);
     return { matched: true };
   }

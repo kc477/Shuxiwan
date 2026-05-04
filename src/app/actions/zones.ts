@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 import { prisma, toJson } from "@/lib/db";
 import { requireUser } from "@/lib/session";
+import { logActivity } from "@/lib/activity";
 
 const CreateSchema = z.object({
   eventId: z.string(),
@@ -34,6 +35,10 @@ export async function createZone(input: unknown) {
       members: { create: { userId: me.id } },
     },
   });
+  await logActivity(data.eventId, me.id, "created_zone", {
+    zoneId: zone.id,
+    title: zone.title,
+  });
   revalidatePath(`/events/${data.eventId}`);
   redirect(`/events/${data.eventId}/zones/${zone.id}`);
 }
@@ -42,6 +47,9 @@ export async function joinZone(zoneId: string) {
   const me = await requireUser();
   const zone = await prisma.zone.findUnique({ where: { id: zoneId } });
   if (!zone) throw new Error("ZONE_NOT_FOUND");
+  const existing = await prisma.zoneMember.findUnique({
+    where: { zoneId_userId: { zoneId, userId: me.id } },
+  });
   await prisma.zoneMember.upsert({
     where: { zoneId_userId: { zoneId, userId: me.id } },
     update: { leftAt: null },
@@ -53,6 +61,12 @@ export async function joinZone(zoneId: string) {
   });
   if (memberCount >= 3 && zone.status === "gathering") {
     await prisma.zone.update({ where: { id: zoneId }, data: { status: "active" } });
+  }
+  if (!existing && me.id !== zone.creatorId) {
+    await logActivity(zone.eventId, me.id, "joined_zone", {
+      zoneId,
+      title: zone.title,
+    });
   }
   revalidatePath(`/events/${zone.eventId}`);
   revalidatePath(`/events/${zone.eventId}/zones/${zoneId}`);
